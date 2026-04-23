@@ -1,9 +1,11 @@
+import os
 import streamlit as st
 import joblib
 import numpy as np
 import pandas as pd
 from PIL import Image
-import os
+import shap
+import matplotlib.pyplot as plt
 
 # 显示图片（图片在上，标题在下）
 st.markdown("""
@@ -16,22 +18,21 @@ st.markdown("""
 # 显示描述文本
 st.markdown("""
     <p style='text-align: left; font-size: 16px; margin-bottom: 28px;'>
-        The 2M-EC (Bimodal Multilevel Endometrial Cancer) model is designed for patient-centered minimally invasive ENDOM screening with high sensitivity and precise diagnosis.<br><br>
-        Utilizes multiple models to calculate cancer risk probabilities:<br>
-        • <b>CP</b> (Clinical-Pathological Model): Minimally invasive screening model for early-stage endometrial cancer<br>
-        • <b>UCP</b> (Ultra-precision Clinical-Piological Model): Precision screening model for endometrial cancer<br><br>
+        The 2M-EC (Multimodal Multilevel Endometrial Cancer) is a patient-first platform for the early screening of endometrial cancer (EC).<br><br>
+        Employs patient-centered models to calculate specific risk probabilities:<br>
+        • <b>"CP"</b> (EC minimally invasive screening): Integrating cervicovaginal metabolic profiling and plasma molecular profiling with routine clinical indicators for early-stage cancer screening<br>
+        • <b>"UCP"</b> (EC precision screening): Integrating uterine metabolic profiling, cervicovaginal metabolic profiling and plasma molecular profiling with routine clinical indicators for precision cancer screening<br><br>
         Input data includes:<br>
-        • Patient clinical information: demographics, medical history, ultrasonographic imaging, and tumor markers (HE4 and CA125)<br>
-        • Multi-source biospecimen omics data: endometrial metabolic omics, cervical metabolic omics, and plasma molecular omics<br><br>
-        Risk calculation:<br>
+        • Patient baseline: demographics, medical history, ultrasound examination results, and plasma tumor markers (HE4 and CA125)<br>
+        • Biofluid molecular omics: cervicovaginal metabolic omics, uterine metabolic omics, and plasma molecular omics<br><br>
+        Risk screening results annotation:<br>
         • High-risk probability = Highest cancer probability across models<br>
         • Low-risk probability = 1 - Highest cancer probability<br><br>
-        Please select either the CP or UCP model based on your requirements.
+        Select the model that best fits your requirements and submit: "CP" or "UCP".
     </p>
 """, unsafe_allow_html=True)
 
-
-# 获取 APP.py 所在目录
+# 获取 APP.py 所在目录，用于定位 .pkl 文件
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 加载标准器和模型
@@ -87,7 +88,7 @@ additional_features = {
           'UM4210.0', 'UM3935.0', 'UM4256.0']
 }
 
-# 模型选择
+# ── 模型选择 ──────────────────────────────────────────────────────────
 selected_models = st.multiselect(
     "Select the model(s) to be used (you can select one or more)",
     options=['U', 'C', 'P'],
@@ -111,8 +112,7 @@ if selected_models:
                 all_ms_features.append(f)
 
     template_df = pd.DataFrame(columns=all_ms_features)
-    template_df.loc[0] = [0.0] * len(all_ms_features)   # 示例行（全0）
-
+    template_df.loc[0] = [0.0] * len(all_ms_features)
     csv_template = template_df.to_csv(index=False)
     st.download_button(
         label="📥 Download template CSV for selected model(s)",
@@ -151,9 +151,7 @@ if input_method == "Upload file (CSV / Excel)":
             st.success(f"✅ File uploaded successfully: {ms_df.shape[0]} row(s), {ms_df.shape[1]} column(s)")
             st.dataframe(ms_df.head())
 
-            # 取第一行数据填入 user_input
             row = ms_df.iloc[0]
-
             missing_cols = []
             for model_key in selected_models:
                 for feature in additional_features[model_key]:
@@ -163,7 +161,7 @@ if input_method == "Upload file (CSV / Excel)":
                         missing_cols.append(feature)
 
             if missing_cols:
-                st.warning(f"⚠️ The following columns are missing from the file and will default to 0:\n{missing_cols}")
+                st.warning(f"⚠️ The following columns are missing and will default to 0:\n{missing_cols}")
                 for f in missing_cols:
                     user_input[f] = 0.0
 
@@ -189,26 +187,49 @@ if st.button("Submit"):
         st.error("Please upload a valid mass spectrometry data file before submitting.")
     else:
         model_predictions = {}
+        shap_explanations = {}
 
         for model_key in selected_models:
             model_input_df = pd.DataFrame([user_input])
             model_features = original_features_to_scale + additional_features[model_key]
             model_input_df = model_input_df[model_features]
-            model_input_df[original_features_to_scale] = scalers[model_key].transform(
-                model_input_df[original_features_to_scale]
+
+            scaled_features_df = pd.DataFrame(
+                scalers[model_key].transform(model_input_df[original_features_to_scale]),
+                columns=original_features_to_scale,
+                index=model_input_df.index
             )
-            predicted_proba = models[model_key].predict_proba(model_input_df)[0]
-            predicted_class = models[model_key].predict(model_input_df)[0]
+            final_input_df = pd.concat(
+                [scaled_features_df, model_input_df[additional_features[model_key]]], axis=1
+            )
+
+            predicted_proba = models[model_key].predict_proba(final_input_df)[0]
+            predicted_class = models[model_key].predict(final_input_df)[0]
+
             model_predictions[model_key] = {
                 'proba': predicted_proba,
                 'class': predicted_class
             }
 
+            # 计算 SHAP 值
+            explainer = shap.TreeExplainer(models[model_key])
+            shap_values_Explanation = explainer(final_input_df)
+            shap_explanations[model_key] = shap_values_Explanation
+
+            # 显示 SHAP waterfall 图（CP 或 UCP 组合时）
+            if set(selected_models) == {'C', 'P'} or len(selected_models) == 3:
+                st.subheader(f"SHAP Waterfall Plot for Model {model_key}")
+                fig, ax = plt.subplots(figsize=(10, 6))
+                shap.plots.waterfall(shap_values_Explanation[0], show=False)
+                st.pyplot(fig)
+                plt.close(fig)
+
+        # ── 输出预测结果 ──────────────────────────────────────────────
         if len(selected_models) == 1:
-            st.write("Error")
+            st.error("Error: Please select at least two models for CP/UCP screening or three models for ENDOM diagnosis.")
 
         elif len(selected_models) == 2 and set(selected_models) != {'C', 'P'}:
-            st.write("Error")
+            st.error("Error: For ENDOM screening, please select both 'C' and 'P' models.")
 
         elif len(selected_models) == 2 and set(selected_models) == {'C', 'P'}:
             has_positive = any(model_predictions[mk]['class'] == 1 for mk in selected_models)
@@ -228,4 +249,4 @@ if st.button("Submit"):
                 st.write(f"ENDOM diagnosis：{low_risk_proba:.2f}%- low risk")
 
         else:
-            st.write("Error")
+            st.error("Error: Invalid number of models selected. Please select 2 models (C and P) for screening or 3 models for diagnosis.")

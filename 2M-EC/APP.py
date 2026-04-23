@@ -3,6 +3,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from PIL import Image
+import os
 
 # 显示图片（图片在上，标题在下）
 st.markdown("""
@@ -30,17 +31,20 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# 获取 APP.py 所在目录
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # 加载标准器和模型
 scalers = {
-    'C': joblib.load('scaler_standard_C.pkl'),
-    'P': joblib.load('scaler_standard_P.pkl'),
-    'U': joblib.load('scaler_standard_U.pkl')
+    'C': joblib.load(os.path.join(BASE_DIR, 'scaler_standard_C.pkl')),
+    'P': joblib.load(os.path.join(BASE_DIR, 'scaler_standard_P.pkl')),
+    'U': joblib.load(os.path.join(BASE_DIR, 'scaler_standard_U.pkl'))
 }
 
 models = {
-    'C': joblib.load('xgboost_C.pkl'),
-    'P': joblib.load('xgboost_P.pkl'),
-    'U': joblib.load('xgboost_U.pkl')
+    'C': joblib.load(os.path.join(BASE_DIR, 'xgboost_C.pkl')),
+    'P': joblib.load(os.path.join(BASE_DIR, 'xgboost_P.pkl')),
+    'U': joblib.load(os.path.join(BASE_DIR, 'xgboost_U.pkl'))
 }
 
 # 定义特征名称
